@@ -58,11 +58,9 @@ LLVM Backend'lerin en yenilikçi taraflarından biri **TableGen** altyapısıdı
 ### Örnek TableGen Tanımı (`TargetRegister.td` konsepti)
 
 ```tablegen
-// x86_64 Akümülatör Yazmacı Tanımı
 def RAX : Register<"rax">;
 def RBX : Register<"rbx">;
 
-// Donanım Komutu Tanımı: ADD komutu
 class x86_instruction<bits<8> opcode, string asmstr> : Instruction {
   let OutOperandList = (outs GR64:$dst);
   let InOperandList = (ins GR64:$src1, GR64:$src2);
@@ -91,7 +89,7 @@ Buyruk Seçimi, LLVM IR talimatlarını hedef işlemcinin desteklediği somut ma
 
 ## 4.4 Yazmaç Tahsisi (Register Allocation) ve Scheduling
 
-LLVM IR sonsuz sayıda **sanal yazmaç (virtual register)** kullanabilir (`%1`, `%2`, `%3`...). Ancak gerçek işlemcilerin kısıtlı sayıda **fiziksel yazmacı (physical register)** vardır (örn: x86_64 için 16 genel amaçlı yazmaç).
+LLVM IR sonsuz sayıda **sanal yazmaç (virtual register)** kullanabilir (`%1`, `%2`, `%3`...). Ancak gerçek işlemcilerin kısıtlı sayıda **fiziksel yazmacı (physical register)** vardır (örneğin x86_64 için 16 genel amaçlı yazmaç).
 
 ### Register Allocation (RA)
 Register Allocator, sanal yazmaçları fiziki yazmaçlara atar. Eğer fiziki yazmaç sayısı yetersiz kalırsa, bazı değerleri yığına saklar ve tekrar okur. Bu duruma **Spilling** adı verilir.
@@ -101,7 +99,7 @@ Register Allocator, sanal yazmaçları fiziki yazmaçlara atar. Eğer fiziki yaz
 
 <div class="callout callout-warning">
 <div class="callout-title">Spilling Maliyeti</div>
-Register Spilling, işlemci yazmacı yerine RAM/L1 Cache erişimi gerektirdiği için oyun gibi sıkı performans gerektiren döngülerde yavaşlamaya neden olur. LLVM Register Allocator bunu minimize edecek algoritmalar (Greedy Register Allocator) kullanır.
+Register Spilling, işlemci yazmacı yerine RAM ve L1 Cache erişimi gerektirdiği için oyun gibi sıkı performans gerektiren döngülerde yavaşlamaya neden olur. LLVM Register Allocator bunu minimize edecek algoritmalar (Greedy Register Allocator) kullanır.
 </div>
 
 ---
@@ -139,14 +137,12 @@ Oyun derleyicimizin en son aşamasında, ürettiğimiz LLVM modülünü diskte `
 #include <system_error>
 
 bool emitObjectFile(llvm::Module& module, const std::string& outputFilename) {
-    // 1. Tüm Hedef Mimarileri İlklendir
     llvm::InitializeAllTargetInfos();
     llvm::InitializeAllTargets();
     llvm::InitializeAllTargetMCs();
     llvm::InitializeAllAsmParsers();
     llvm::InitializeAllAsmPrinters();
 
-    // 2. Varsayılan Hedef Üçlüsünü (Target Triple) Al (Örn: x86_64-pc-linux-gnu)
     auto targetTriple = llvm::sys::getDefaultTargetTriple();
     module.setTargetTriple(targetTriple);
 
@@ -158,7 +154,6 @@ bool emitObjectFile(llvm::Module& module, const std::string& outputFilename) {
         return false;
     }
 
-    // 3. Hedef Makine Yapılandırması (CPU: generic, Features: none)
     auto cpu = "generic";
     auto features = "";
 
@@ -168,28 +163,26 @@ bool emitObjectFile(llvm::Module& module, const std::string& outputFilename) {
 
     module.setDataLayout(targetMachine->createDataLayout());
 
-    // 4. Çıktı Dosyasını Açma (.o)
     std::error_code ec;
     llvm::raw_fd_ostream dest(outputFilename, ec, llvm::sys::fs::OF_None);
 
     if (ec) {
-        llvm::errs() << "HATA: Çıktı dosyası açılamadı: " << ec.message() << "\n";
+        llvm::errs() << "HATA: Cikti dosyasi acilamadi: " << ec.message() << "\n";
         return false;
     }
 
-    // 5. CodeGen Pass Manager İle Nesne Dosyası Üretimi
     llvm::legacy::PassManager pass;
     auto fileType = llvm::CodeGenFileType::CGFT_ObjectFile;
 
     if (targetMachine->addPassesToEmitFile(pass, dest, nullptr, fileType)) {
-        llvm::errs() << "HATA: TargetMachine bu dosya tipini üretemiyor!\n";
+        llvm::errs() << "HATA: TargetMachine bu dosya tipini uretemiyor!\n";
         return false;
     }
 
     pass.run(module);
     dest.flush();
 
-    llvm::outs() << "BAŞARILI: Nesne dosyası üretildi -> " << outputFilename << "\n";
+    llvm::outs() << "BASARILI: Nesne dosyasi uretildi -> " << outputFilename << "\n";
     return true;
 }
 ```
@@ -198,14 +191,22 @@ bool emitObjectFile(llvm::Module& module, const std::string& outputFilename) {
 
 ### Koda Adım Adım Derinlemesine Bakış ve Yürütme Algoritması
 
-1. **Target Sürücülerinin Kaydı (`InitializeAllTargets` vb.):**
-   * *Çalışma Mantığı:* Statik LLVM kütüphanelerindeki tüm mimari sürücülerini (x86, ARM, WebAssembly vb.) runtime kayıt tablosuna ekler.
-2. **`TargetRegistry::lookupTarget`:**
-   * *Çalışma Mantığı:* Sistem hedef üçlüsünü (Triple) inceleyerek ilgili hedef mimarinin derleyici fabrika nesnesini arar ve bulur.
-3. **`createTargetMachine` ve `createDataLayout`:**
-   * *Çalışma Mantığı:* Hedef donanımın bellek hizalama kurallarını (Data Layout: little-endian, pointer boyutu 64-bit vb.) modüle kaydeder.
-4. **`addPassesToEmitFile`:**
-   * *Çalışma Mantığı:* Instruction Selection, Register Allocation ve MC (Machine Code) katmanlarını birleştirerek `.o` üretecek backend pass zincirini oluşturur.
+1. **Target Sürücülerinin Kaydı (`llvm::InitializeAllTargets` vb.):**
+   * **Çalışma İlkesi:** Statik LLVM kütüphanelerindeki tüm mimari sürücülerini (x86_64, ARM, WebAssembly, RISC-V vb.) derleyicinin çalışma zamanı kayıt tablosuna ekler. Bu adım atlanırsa `lookupTarget` çağrısı başarısız olur.
+2. **Target Triple Tanımlanması (`getDefaultTargetTriple`):**
+   * **Çalışma İlkesi:** Derleyicinin çalıştığı işletim sistemi ve mimari bilgisini (örneğin `x86_64-unknown-linux-gnu`) tespit eder ve modüle hedef olarak kaydeder.
+3. **`TargetRegistry::lookupTarget` İle Hedef Arama:**
+   * **Çalışma İlkesi:** Sistem hedef üçlüsünü (Target Triple) inceleyerek ilgili hedef mimarinin derleyici fabrika nesnesini bulur.
+4. **`createTargetMachine` Yapılandırması:**
+   * **Çalışma İlkesi:** Hedef işlemci mimarisine özgün bellek düzenini (Data Layout: endianness, pointer genişliği) ve derleme seçeneklerini içeren `TargetMachine` örneği üretir.
+5. **Data Layout Senkronizasyonu (`module.setDataLayout`):**
+   * **Çalışma İlkesi:** Oluşturulan `TargetMachine` nesnesinin bellek hizalama ve tip boyut bilgilerini LLVM IR modülüne aktarır. Aksi halde frontend ve backend tip boyutları çelişebilir.
+6. **Dosya Akışı Yapılandırması (`raw_fd_ostream`):**
+   * **Çalışma İlkesi:** Üretilecek ikili nesne dosyasının yazılacağı diske erişim akışı açılır.
+7. **CodeGen Pass Zinciri İnşası (`addPassesToEmitFile`):**
+   * **Çalışma İlkesi:** Buyruk Seçimi (Instruction Selection), Yazmaç Tahsisi (Register Allocation) ve MC (Machine Code) katmanlarını birleştirerek `.o` nesne dosyasını disk ortamına üretecek backend pass zincirini bağlar.
+8. **Pass İcrası ve Dosya Sıfırlama (`pass.run` ve `dest.flush`):**
+   * **Çalışma İlkesi:** Hazırlanan backend geçişleri modül üzerinde yürütülür ve bellekteki tüm baytlar çıktı dosyasına yazılarak dosya akışı tamamlanır.
 
 ---
 
