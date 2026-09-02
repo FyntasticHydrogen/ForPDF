@@ -43,9 +43,9 @@ Middle-end optimizasyon katmanı, kaynak dilden ve hedef donanımdan tamamen ba�
 
 LLVM 13 ve sonrasında eski (Legacy) Pass Manager tamamen kaldırılmış ve yerini **New Pass Manager (NPM)** almıştır. New Pass Manager'ın getirdiği temel yenilikler ve avantajlar şunlardır:
 
-1. **Tür Güvenliği ve Derleme Zamanı Şablonları (Templates & CRTP):** Kalıtım (vtable) yerine C++ şablonları kullanılarak fonksiyon çağrı maliyetleri düşürülmüştür.
-2. **Esnek Analiz Önbellekleme (Analysis Management):** Bir optimizasyon passi IR'ı değiştirmediyse, önceki analiz sonuçları (örn: Dominator Tree) tekrar hesaplanmaz.
-3. **Piyasa Standartları Pipeline Desteği:** `O1`, `O2`, `O3`, `Os`, `Oz` gibi hazır optimizasyon seviyeleri kolayca oluşturulabilir.
+1. **Tür Güvenliği ve Derleme Zamanı Şablonları (Templates & CRTP):** Kalıtım (vtable) yerine C++ şablonları ve Mixin yapısı (`llvm::PassInfoMixin`) kullanılarak sanal fonksiyon çağrı maliyetleri sıfırlanmıştır.
+2. **Esnek Analiz Önbellekleme (Analysis Management):** Bir optimizasyon passi IR'ı değiştirmediyse, önceki analiz sonuçları (örn: Dominator Tree, Loop Info) tekrar hesaplanmaz (`PreservedAnalyses::all()`).
+3. **Piyasa Standartları Pipeline Desteği:** `O1`, `O2`, `O3`, `Os`, `Oz` gibi hazır optimizasyon seviyeleri tek hat üzerinden yapılandırılabilir.
 
 <div class="callout callout-info">
 <div class="callout-title">NPM vs Legacy Performans Farkı</div>
@@ -169,6 +169,21 @@ Bir LLVM talimatını silmeden önce (`eraseFromParent()`), onun ürettiği sonu
 
 ---
 
+### Koda Adım Adım Derinlemesine Bakış ve Pass Yürütme Algoritması
+
+1. **`PassInfoMixin<GameFastMathPass>` Kalıtımı (CRTP Pattern):**
+   * *Çalışma Mantığı:* Curiously Recurring Template Pattern (CRTP) yapısıdır. Sanal fonksiyon tablosu (vtable) masrafı olmadan static polymorphism sağlar.
+2. **`run(Function& F, FunctionAnalysisManager& FAM)` Metodu:**
+   * *Çalışma Mantığı:* NPM her fonksiyon için bu metodu otomatik çağırır. `FAM` parametresi sayesinde Dominator Tree veya Loop Info gibi analizler hazır alınabilir.
+3. **Güvenli İteratör Döngüsü (`InstIt++`):**
+   * *Çalışma Mantığı:* Döngü içinde bir talimat silineceği için (`eraseFromParent()`), iteratör önceden artırılır (`*InstIt++`). Aksi takdirde dangling pointer hatası ile derleyici çöker!
+4. **`replaceAllUsesWith` & `eraseFromParent`:**
+   * *Çalışma Mantığı:* Eski bölme talimatına bağlı olan tüm SSA tüketicilerini yeni çarpma talimatına yönlendirir ve eski talimatı bellekten siler.
+5. **`PreservedAnalyses` Dönüş Değeri:**
+   * *Çalışma Mantığı:* Eğer fonksiyonda değişiklik yapıldıysa `none()` dönerek diğer analizlerin tekrar hesaplanmasını sağlar; değişiklik yoksa `all()` dönerek önbelleği korur.
+
+---
+
 ## 3.5 Pass Pipeline Oluşturma ve Optimizasyon Çalıştırma
 
 Oyun derleyicimizde bu custom pass'ı ve LLVM'in standart optimizasyon pipeline'ını nasıl çalıştıracağımızı görelim:
@@ -203,4 +218,10 @@ void runOptimizationPipeline(llvm::Module& module) {
 }
 ```
 
-Bu bölüm ile LLVM Pass Manager altyapısını, New Pass Manager'ın mimarisini ve custom optimizasyon yazmayı öğrendik.
+---
+
+## 3.6 Bölüm Özeti ve Orta Yüz (Middle-end) Optimizasyon Değerlendirmesi
+
+Bu bölümde, derleyicimizin Orta Yüz (Middle-End) katmanını ve **New Pass Manager (NPM)** mimarisini detaylıca öğrendik. C++ şablonları tabanlı NPM yapısının eski Legacy Pass Manager'a göre sağladığı hız ve analiz önbellekleme üstünlüklerini inceledik.
+
+Oyun motorlarının yüksek başarım gereksinimleri için hayati önem taşıyan Sabit Katlama (Constant Folding), Ortak Alt İfade Eleme (CSE), Ölü Kod Eleme (DCE) ve Döngü Açma (Loop Unrolling) tekniklerinin LLVM IR üzerindeki dönüşümlerini izledik. Yavaş bölme işlemlerini çarpmaya çeviren özgün bir `GameFastMathPass` C++ sınıfı kodlayarak analiz ve dönüştürme pass'lerinin çalışma algoritmalarını kavradık. Bir sonraki bölümde, optimize edilmiş bu IR'ı gerçek donanım komutlarına (Assembly / Object File) dönüştürmek üzere **Backend Kod Üretimi ve Target Machine** mimarisine geçeceğiz.

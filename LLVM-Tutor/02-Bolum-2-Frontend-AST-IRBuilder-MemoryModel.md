@@ -2,9 +2,9 @@
 
 ## 2.1 Soyut Sözdizim Ağacı (AST) Tasarımı
 
-Ön Yüz (Frontend) mimarisinin kalbinde **Soyut Sözdizim Ağacı (Abstract Syntax Tree - AST)** yer alır. AST, kaynak kodun dilbilgisel yapısını düğümler (nodes) halinde temsil eden hiyerarşik bir ağaç veri yapısıdır. Oyun programlama dilimizde hem ifade (expression) hem de bildirim/deyim (statement) düğümlerine ihtiyacımız vardır.
+Ön Yüz (Frontend) mimarisinin kalbinde **Soyut Sözdizim Ağacı (Abstract Syntax Tree - AST)** yer alır. AST, kaynak kodun metinsel halindeki gereksiz karakterleri (parantezler, noktalı virgüller, boşluklar vb.) ayıklayarak kodun mantıksal ve dilbilgisel hiyerarşisini ağaç veri yapısı şeklinde temsil eder. Oyun programlama dilimizde hem ifade (expression) hem de bildirim/deyim (statement) düğümlerine ihtiyacımız vardır.
 
-Modern C++ (C++17/20) standartlarında AST düğümlerini `std::unique_ptr` ve sanal fonksiyonlar (polymorphism) veya `std::variant` ile temsil ederiz. Her AST düğümü, kendini LLVM IR'a dönüştürme sorumluluğuna (`codegen()`) sahiptir.
+Modern C++ (C++17/20) standartlarında AST düğümlerini `std::unique_ptr` ve sanal fonksiyonlar (polymorphism) ile temsil ederiz. Her AST düğümü, kendini LLVM IR'a dönüştürme sorumluluğuna (`codegen()`) sahiptir.
 
 ```
                   [FunctionAST: "UpdatePlayerPosition"]
@@ -40,11 +40,11 @@ LLVM IR, güçlü bir şekilde tiplendirilmiş (strongly typed), sonsuz sayıda 
 
 ## 2.3 Tekli Atama Biçimi (Static Single Assignment - SSA) ve PHI Düğümleri
 
-### SSA Nedir?
-SSA formunda, her değişken **yalnızca bir kez** atanabilir. Klasik bir programlama dilinde bir değişkene birden fazla kez değer atanabilir:
+### SSA Nedir ve Neden Hayatidir?
+SSA formunda, her sanal yazmaca veya değişkene **yalnızca bir kez** değer atanabilir. Klasik bir programlama dilinde bir değişkene birden fazla kez değer atanabilir:
 
 ```c
-// Klasik C/C++ Kodu
+// Klasik C/C++ Kodu (Gereksiz Değişken Yeniden Atamaları)
 int health = 100;
 health = health - damage;
 health = health + healAmount;
@@ -59,7 +59,8 @@ Bu kod SSA yapısına dönüştürüldüğünde, her atama yeni bir SSA sürüm 
 %health2 = add i32 %health1, %healAmount
 ```
 
-SSA formunun derleyicilere sağladığı en büyük avantaj, veri akışı analizini (Data Flow Analysis) inanılmaz derecede basitleştirmesidir. Bir yazmacın değerinin nereden geldiği ve nerede değiştiği tartışmasız bir şekilde bellidir.
+* **Çalışma Algoritması ve Avantajı:** SSA formunun derleyicilere sağladığı en büyük avantaj, **Veri Akışı Analizini (Data Flow Analysis)** doğrusal hale getirmesidir. Bir yazmacın değerinin nereden geldiği ve nerede değiştiği tartışmasız bir şekilde bellidir. Derleyici, karmaşık gösterici (pointer) takibi yapmadan bağımlılıkları görür.
+* **Benzetme:** SSA formunu bir muhasebe defterindeki **Silinemez Günlük Kayıtlara (Immutable Ledger / Blockchain)** benzetebiliriz. Eski bir girdinin üzerini çizip değiştiremezsiniz; her yeni durum için yeni bir satır kaydı açarsınız.
 
 ### PHI Düğümleri (`phi` instruction)
 Dallanma (if-else, döngüler) olan durumlarda bir değişkenin hangi kontrol akışı yolundan geldiği çalışma zamanında belli olur. SSA kuralını bozmadan bu durumu çözmek için **PHI Düğümleri (`phi` instruction)** kullanılır.
@@ -104,7 +105,7 @@ Basic Block'ların birbirine `br` (branch) talimatları ile bağlanmasıyla **Ko
 
 ---
 
-## 2.5 Bellek Modeli ve `GetElementPtr` (GEP)
+## 2.5 Bellek Modeli ve `GetElementPtr` (GEP) Adres Hesaplama Algoritması
 
 LLVM IR'da iki temel bellek erişim mantığı vardır:
 1. **Yazmaç Tabanlı (Register-based SSA):** `add`, `sub`, `mul` gibi işlemler doğrudan sanal yazmaçlar üzerinde yürür.
@@ -146,6 +147,9 @@ LLVM IR üzerinde bir `Entity*` göstericisinden oyuncunun `position[1]` (y koor
 %y_val = load float, float* %y_ptr, align 4
 ```
 
+* **Adres Hesaplama Formülü:**
+$$\text{Hedef Adres} = \text{Taban Adres} + (0 \times \text{sizeof}(Entity)) + \text{offsetof}(Entity, position) + (1 \times \text{sizeof}(float))$$
+
 <div class="callout callout-info">
 <div class="callout-title">GEP Neden İlk İndis Olarak '0' Alır?</div>
 C/C++ dilindeki `entity_ptr->position[1]` ifadesinde, `entity_ptr` aslında bir dizi nesnesinin ilk elemanının adresidir (`*(entity_ptr + 0)`). İlk indis olan `0`, pointer seviyesinde kaç eleman öteye gidileceğini belirler.
@@ -158,8 +162,6 @@ C/C++ dilindeki `entity_ptr->position[1]` ifadesinde, `entity_ptr` aslında bir 
 Şimdi bu kavramları bir araya getirerek oyun dilimiz için bir AST yapısı ve bu AST'yi LLVM IR'a dönüştüren C++ kodunu yazalım.
 
 ### C++ Örneği: AST ve IR Generation (`src/frontend_ast.cpp`)
-
-Aşağıdaki kapsamlı C++ örneğinde, bir oyun karakterinin canını ve zırhını güncelleyen `UpdateHealth` fonksiyonunun AST yapısı ve IR jenerasyonu gösterilmektedir:
 
 ```cpp
 #include <llvm/IR/LLVMContext.h>
@@ -251,9 +253,21 @@ void generateSampleAST() {
 }
 ```
 
-### Koda Adım Adım Bakış ve Açıklaması:
+---
 
-1. **`ExprAST` Arabirimi**: Tüm AST düğümlerinin tüzüğü olan saf sanal (pure virtual) base sınıftır.
-2. **`ConstantFP::get`**: Çift duyarlıklı (double) sabit bir float LLVM `Value` nesnesi türetir.
-3. **`CreateFAdd / CreateFMul`**: IEEE-754 uyumlu float toplama ve çarpma talimatlarını builder seviyesinde hafızaya yazar.
-4. **`builder.SetInsertPoint`**: IRBuilder'ın yeni yazılacak olan talimatları hangi Basic Block içerisine ekleyeceğini belirler.
+### Koda Adım Adım Derinlemesine Bakış ve Yürütme Algorithması
+
+1. **`ExprAST::codegen` Sanal Fonksiyon Özyinelemesi (Recursion):**
+   * *Çalışma Mantığı:* Ağacın en altındaki (leaf nodes) sabitler (`NumberExprAST`) önce ziyaret edilir. Alt düğümlerden dönen `llvm::Value*` göstericileri üst düğümlere (`BinaryExprAST`) girdi olarak iletilir. Bu yöntem Post-Order Traversal (Önce Sol, Sonra Sağ, Sonra Kök) algoritmasıdır.
+2. **`builder.CreateFAdd` / `CreateFMul`:**
+   * *Çalışma Mantığı:* İki float değeri toplayan veya çarpan LLVM IR talimatlarını oluşturur ve `addtmp`/`multmp` isimli sanal yazmaçlara atar.
+3. **`builder.CreateRet(result)`:**
+   * *Çalışma Mantığı:* Bloğun sonlandırıcı talimatını (Terminator) ekler ve hesaplanan nihai değeri fonksiyondan döndürür.
+
+---
+
+## 2.7 Bölüm Özeti ve Ön Yüz Mimarisi Değerlendirmesi
+
+Bu bölümde, oyun programlama dilimizin Ön Yüz (Frontend) mimarisini baştan sona ele aldık. Metinsel kaynak kodun **Soyut Sözdizim Ağacına (AST)** dönüştürülmesini, özyineli `codegen()` mimarisi ile bu ağacın LLVM IR'a aktarılmasını inceledik.
+
+LLVM IR'ın bellek ve veri akışı omurgasını oluşturan **Static Single Assignment (SSA)** formunu, dallanmalardaki değer belirsizliklerini çözen **PHI Düğümlerini (`phi`)**, kontrol akış grafiklerini (CFG) ve yığın tahsisi (`alloca`) ile bellek adres hesaplaması yapan **`GetElementPtr` (GEP)** talimatının matematiksel arka planını kavradık. Bir sonraki bölümde, ürettiğimiz bu ham LLVM IR'ı optimize etmek üzere Middle-End katmanına ve **New Pass Manager (NPM)** altyapısına geçeceğiz.

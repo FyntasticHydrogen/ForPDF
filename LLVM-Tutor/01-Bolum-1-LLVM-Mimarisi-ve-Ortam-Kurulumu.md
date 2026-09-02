@@ -117,13 +117,30 @@ target_link_libraries(gamelang_compiler PRIVATE ${llvm_libs})
 
 ---
 
-## 1.5 İlk LLVM C++ Programı: `LLVMContext`, `Module`, ve `IRBuilder` Kavramları
+## 1.5 Derleyici Çekirdeği ve Çekirdek Kavramlar: `LLVMContext`, `Module`, ve `IRBuilder` Derinlemesine İnceleme
 
-LLVM C++ API'sinde çalışırken bilmeniz gereken üç temel yapı vardır:
+LLVM C++ API'sinde kod yazarken en çok karşılaşacağınız üç temel C++ yapısı bulunmaktadır. Bu yapılar sadece birer kütüphane nesnesi değil, derleyicinizin bellek ve yürütme mimarisinin omurgasını oluşturur.
 
-1. **`llvm::LLVMContext`:** LLVM'in tüm durum bilgilerini (tip tabloları, sabitler, çekirdek veri yapıları) yöneten ipucu nesnesidir. İki farklı thread üzerinde çalışırken her thread kendi `LLVMContext` nesnesine sahip olmalıdır.
-2. **`llvm::Module`:** Bir derleme birimini (Translation Unit) temsil eden ana konteynerdir. İçerisinde fonksiyonlar, küresel değişkenler, tip tanımları ve hedef mimari bilgileri barındırır.
-3. **`llvm::IRBuilder<>`:** Basic Block'lar içerisine adım adım LLVM IR talimatı (instruction) ekleyen, tür güvenli yardımcı C++ şablon sınıfıdır.
+### 1. `llvm::LLVMContext`: Derleyici Bellek Havuzu ve Tip Deposu
+`LLVMContext`, LLVM'in tüm durum bilgilerini (state), tip tablolarını, sabit tanımlarını ve dahili veri yapılarını yöneten ana çekirdektir.
+
+* **Çalışma Algoritması ve Mantığı:** LLVM bellek yönetimi performans odaklıdır. Örneğin `i32` (32-bit tamsayı) veya `float` tipini her ihtiyaç duyulduğunda yeniden `new` ile tahsis etmek yerine `LLVMContext` içerisinde Unification (Tekilleştirme / Flyweight Deseni) yöntemiyle tek bir defa oluşturur. Böylece milyonlarca değişkene sahip bir projede bile bellek kullanımı ve karşılaştırma (`==`) işlemleri pointer karşılaştırması hızına iner.
+* **Benzetme:** `LLVMContext` nesnesini bir fabrikanın **Merkezi Deposu veya Hammadde Omurgası** olarak düşünebilirsiniz. Fabrikada üretilen her ürün (talimatlar, tipler) bu depodaki hammaddeleri ortaklaşa kullanır.
+* **İzlek Güvenliği (Thread Safety):** `LLVMContext` tek bir thread üzerinde çalışacak şekilde tasarlanmıştır. Çok izlekli (multithreaded) derleyicilerde (örneğin aynı anda 8 oyun betiğini paralel derlerken), her thread'in kendisine ait ayrı bir `LLVMContext` nesnesi olmalıdır.
+
+### 2. `llvm::Module`: Derleme Birimi Konteyneri
+`llvm::Module`, bir kaynak kod dosyasının (Translation Unit) LLVM dünyasındaki karşılığıdır.
+
+* **İçerik ve Yapı:** Bir `Module` içerisinde fonksiyonlar (`llvm::Function`), küresel değişkenler (`llvm::GlobalVariable`), tip tanımları (`llvm::StructType`), veri düzeni (`llvm::DataLayout`) ve hedef donanım bilgisi (`Target Triple`) barındırır.
+* **Benzetme:** `Module` yapısını bir oyun projesindeki **Tek Bir C++ Dosyası (`.cpp`) veya C# Class Dosyası** gibi düşünebilirsiniz. Tüm fonksiyonlar bu kutunun içerisinde ikamet eder.
+
+### 3. `llvm::IRBuilder<>`: Kod Jeneratörü ve İmleç Yonetimi
+`llvm::IRBuilder<>`, LLVM IR talimatlarını tür güvenli (type-safe) bir biçimde oluşturan ve bunları aktif Basic Block içerisine sırayla yazan yardımcı bir şablon sınıftır.
+
+* **Çalışma Algoritması:** Builder nesnesi dahili bir **Ekleme Noktası İmleci (Insertion Point Cursor)** tutar. Siz `CreateFAdd` veya `CreateRet` çağırdığınızda, builder ilgili C++ talimat nesnesini imlecin gösterdiği Basic Block'un sonuna ekler ve imleci bir adım kaydırır.
+* **Benzetme:** `IRBuilder` nesnesi bir kelime işlemci programındaki **Yazı Yazma İmleci (Text Cursor)** gibidir. İmleç neredeyse yeni yazılan metin (LLVM IR talimatı) tam oraya eklenir.
+
+---
 
 ### Detaylı C++ Örneği: Oyun Vektör Toplama Fonksiyonunun LLVM IR Olarak Üretilmesi (`src/main.cpp`)
 
@@ -205,10 +222,31 @@ int main() {
 `llvm::verifyFunction` çağrısı, oluşturduğunuz IR'ın LLVM tip sistemine ve SSA kurallarına uyup uymadığını denetler. Derleyici geliştirirken bu adımı atlamamak, beklenmeyen çalışma zamanı çökmelerini önler.
 </div>
 
-### Koda Adım Adım Bakış ve Açıklaması:
+---
 
-1. **`getFloatTy()`**: LLVM Context üzerinden tek duyarlıklı kayan noktalı sayı (`float`) tipini alır.
-2. **`FunctionType::get`**: Fonksiyonun geri dönüş tipini ve alacağı parametre listesini tanımlayan metatipi üretir.
-3. **`Function::Create`**: Oluşturulan fonksiyonu `GameEngineMathModule` içerisine yerleştirir.
-4. **`BasicBlock::Create`**: Fonksiyonun kod yürütme adımlarının tutulacağı ilk Temel Bloğu (`entry`) tanımlar.
-5. **`builder.CreateFAdd`**: Kayan noktalı sayılar için LLVM `fadd` talimatını üretir.
+### Koda Adım Adım Derinlemesine Bakış ve Yürütme Algoritması
+
+1. **`auto context = std::make_unique<llvm::LLVMContext>();`**
+   * *Çalışma Mantığı:* LLVM evreninin ilk adımıdır. Tüm veri tipleri (float, i32, pointer vb.) bu context nesnesinin bellek tablosunda tutulur. Derleyicimiz sonlandığında `unique_ptr` sayesinde bellek sızıntısı olmadan otomatik temizlenir.
+2. **`auto module = std::make_unique<llvm::Module>("GameEngineMathModule", *context);`**
+   * *Çalışma Mantığı:* `GameEngineMathModule` isimli yeni bir derleme birimi konteyneri açar. Üretilecek `Vec2Add` fonksiyonu bu modülün sembol tablosuna kaydedilecektir.
+3. **`llvm::FunctionType::get(floatType, paramTypes, false);`**
+   * *Çalışma Mantığı:* C++'taki `float(float, float, float, float)` fonksiyon imzasını oluşturur. Üçüncü parametre olan `false`, fonksiyonun variadic (değişken sayıda parametre alan `printf` gibi) olmadığını belirtir.
+4. **`llvm::Function::Create(...)`**
+   * *Çalışma Mantığı:* Fonksiyon nesnesini hafızada tahsis eder. `ExternalLinkage` parametresi, bu fonksiyonun C++ veya diğer dış kütüphaneler tarafından çağrılabileceğini (public/global olduğunu) ifade eder.
+5. **`vec2AddFunc->arg_begin()` İteratörü**
+   * *Çalışma Mantığı:* Fonksiyonun parametre listesi üzerinde sırayla geçerek C++ nesnelerine (`x1`, `y1`, `x2`, `y2`) isim atar. Bu isimler metin formatındaki `.ll` çıktısında değişken adı olarak görünür.
+6. **`BasicBlock::Create(*context, "entry", vec2AddFunc)` ve `builder.SetInsertPoint(entryBB)`**
+   * *Çalışma Mantığı:* Fonksiyonun ilk kod bloğunu (`entry`) açar. `SetInsertPoint` çağrısı `IRBuilder` imlecini bu bloğun içine konumlandırır. Artık builder ile yazılacak tüm komutlar bu bloğa eklenecektir.
+7. **`builder.CreateFAdd(...)`**
+   * *Çalışma Mantığı:* Kayan noktalı toplama (`fadd`) talimatlarını üretir. İlk çağrıda `x1` ve `x2` toplanıp sanal yazmaca yazılır, ikinci çağrıda `y1` ve `y2` toplanır, üçüncü çağrıda ise iki toplam birleştirilir.
+8. **`llvm::verifyFunction(*vec2AddFunc, ...)`**
+   * *Çalışma Mantığı:* Yapısal doğrulama algoritması çalıştırılır. Fonksiyonun bir sonlandırıcı (`ret`) ile bitip bitmediği, tiplerin uyuşup uyuşmadığı ve SSA kurallarının ihlal edilip edilmediği denetlenir.
+
+---
+
+## 1.6 Bölüm Özeti ve Derleyici Mimarisi Değerlendirmesi
+
+Bu ilk bölümde, modern derleyici tasarımının temel taşı olan **Üç Aşamalı Mimariyi (Three-Phase Architecture)** ve bu mimarinin oyun programlama dili geliştirmedeki stratejik rolünü inceledik. $N \times M$ karmaşıklığını $N + M$ seviyesine indiren bu yapı, dilden ve donanımdan bağımsız evrensel bir ara temsil (LLVM IR) üzerinden çalışmaktadır.
+
+LLVM ekosisteminin sunduğu modüler C++ kütüphaneleri, Clang ön yüzü, LLD bağlayıcısı ve ORC JIT altyapısı sayesinde oyun motorlarında yüksek performans, canlı betik derleme (Hot-Reloading) ve verimli bellek yönetimi elde edilebilmektedir. C++ tarafında `LLVMContext` bellek deposu, `Module` derleme konteyneri ve `IRBuilder` kod üreticisi nesneleri ile ilk fonksiyonumuz olan `Vec2Add` modülünü hafızada inşa edip doğruladık. Bir sonraki bölümde, dilimizin Ön Yüzünü (Frontend) inşa etmek üzere Soyut Sözdizim Ağaçları (AST), SSA formu ve LLVM bellek modelini ele alacağız.
