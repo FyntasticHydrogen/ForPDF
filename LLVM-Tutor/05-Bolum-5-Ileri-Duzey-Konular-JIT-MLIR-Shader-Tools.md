@@ -107,6 +107,19 @@ void runJITScript() {
 
 ---
 
+### Koda Adım Adım Derinlemesine Bakış ve JIT Yürütme Algoritması
+
+1. **`LLJITBuilder().create()`:**
+   * *Çalışma Mantığı:* Bilgisayarın yerel CPU mimarisini tespit eder, JITLink ve bellek sayfa yöneticisini (Memory Page Manager: Read/Write/Execute izinleri) başlatır.
+2. **`ThreadSafeModule` (TSM) Sarmalayıcısı:**
+   * *Çalışma Mantığı:* `Module` ve `LLVMContext` nesnelerini kilit mekanizması altında birleştirir. Böylece oyun motorunun arka plan iş parçacıkları (Worker Threads) güvenle derleme yapabilir.
+3. **Ev Sahibi Sembol Bağlama (`GameEngine_LogMessage`):**
+   * *Çalışma Mantığı:* C++ tarafında `extern "C"` olarak tanımlanan fonksiyon, JIT sembol tablosuna kaydedilir. JIT derleyicisi bu sembolün bellek adresini oyun motorunun proses adres alanından (Process Address Space) okur.
+4. **`symOrErr->toPtr<void (*)()>()` Fonksiyon Göstericisi Dönüşümü:**
+   * *Çalışma Mantığı:* JIT tarafından RAM'de derlenen makine kodunun başlangıç adresini C++ fonksiyon göstericisine (`function pointer`) dökümler. `scriptFn()` çağrısı, araya hiçbir sanal makine veya yorumlayıcı katmanı girmeden doğrudan CPU seviyesinde yürütülür.
+
+---
+
 ## 5.2 MLIR (Multi-Level Intermediate Representation) ve Oyun Motorları İçin Önemi
 
 LLVM IR harika bir alt seviye temsil olsa da, yüksek seviyeli matematiksel yapılar (matris çarpımları, GPU thread blokları, oyun içi fizik simülasyonları) LLVM IR seviyesine indirildiğinde kaybolur.
@@ -146,4 +159,10 @@ Bir oyun programlama dili ekosistemi geliştirmek yalnızca derleyici yazmaktan 
 Oyun geliştirme esnasında Debug derlemelerini ASan ve TSan ile çalıştırmak, karmaşık oyun fiziği ve çok izlekli (multithreaded) iş dizisi (job system) hatalarını aylar öncesinden tespit etmenizi sağlar.
 </div>
 
-Bu bölüm ile JIT scripting, MLIR mimarisi, GPU Shader üretimi ve profesyonel Clang araçlarını kapsamlı olarak öğrendik.
+---
+
+## 5.5 Bölüm Özeti ve İleri Düzey Konular Değerlendirmesi
+
+Bu son bölümde, oyun programlama dili geliştirmede çığır açan ileri düzey LLVM teknolojilerini inceledik. **LLVM ORC JIT (LLJIT)** ve **JITLink** mimarisi sayesinde oyun içi betiklerin yorumlama (interpretation) yavaşlığı olmadan, çalışma zamanında yerel C++ hızında nasıl yürütüldüğünü ve C++ host fonksiyonlarının JIT ortamına nasıl bağlandığını kodladık.
+
+Çok seviyeli ara temsil olan **MLIR (Multi-Level Intermediate Representation)** yapısının matris, vektör ve GPU diyalektleri (Dialects) ile yüksek seviyeli oyun fiziği ve matris optimizasyonlarındaki rolünü ele aldık. CPU ve GPU kod bütünlüğü sağlayan **LLVM SPIR-V** ve **DirectX Shader Compiler (DXC)** araçlarını, derleyici araç zincirini tamamlayan **Clang Tooling**, **LLD** bağlayıcısını ve bellek/izlek hatalarını sıfıra indiren **Clang Sanitizer (ASan, TSan, UBSan)** altyapılarını öğrendik. Bu kapsamlı kılavuz ile LLVM kullanarak sıfırdan yüksek performanslı bir oyun programlama dili inşa etmek için gerekli tüm mimari ve pratik bilgiye sahip oldunuz.

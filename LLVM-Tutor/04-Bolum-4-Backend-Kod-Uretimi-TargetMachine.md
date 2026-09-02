@@ -194,9 +194,23 @@ bool emitObjectFile(llvm::Module& module, const std::string& outputFilename) {
 }
 ```
 
-### Koda Adım Adım Bakış ve Açıklaması:
+---
 
-1. **`InitializeAllTargets()`**: LLVM static kütüphanelerinin hedef mimari sürücülerini (x86, ARM, AArch64, MIPS vb.) C++ runtime'a kaydeder.
-2. **`getDefaultTargetTriple()`**: Kodun çalıştığı bilgisayarın işletim sistemi ve işlemci mimarisini belirler (örn: `x86_64-unknown-linux-gnu`).
-3. **`createTargetMachine()`**: Hedef mimarinin bellek düzenini (Data Layout) ve komut setlerini barındıran TargetMachine nesnesini inşa eder.
-4. **`addPassesToEmitFile()`**: LLVM IR'ı nihai makine koduna dönüştürüp akışa yazan arka yüz pass'lerini kurar.
+### Koda Adım Adım Derinlemesine Bakış ve Yürütme Algoritması
+
+1. **Target Sürücülerinin Kaydı (`InitializeAllTargets` vb.):**
+   * *Çalışma Mantığı:* Statik LLVM kütüphanelerindeki tüm mimari sürücülerini (x86, ARM, WebAssembly vb.) runtime kayıt tablosuna ekler.
+2. **`TargetRegistry::lookupTarget`:**
+   * *Çalışma Mantığı:* Sistem hedef üçlüsünü (Triple) inceleyerek ilgili hedef mimarinin derleyici fabrika nesnesini arar ve bulur.
+3. **`createTargetMachine` ve `createDataLayout`:**
+   * *Çalışma Mantığı:* Hedef donanımın bellek hizalama kurallarını (Data Layout: little-endian, pointer boyutu 64-bit vb.) modüle kaydeder.
+4. **`addPassesToEmitFile`:**
+   * *Çalışma Mantığı:* Instruction Selection, Register Allocation ve MC (Machine Code) katmanlarını birleştirerek `.o` üretecek backend pass zincirini oluşturur.
+
+---
+
+## 4.7 Bölüm Özeti ve Arka Yüz (Backend) Mimarisi Değerlendirmesi
+
+Bu bölümde, LLVM derleyici mimarisinin son aşaması olan **Arka Yüz (Backend) Kod Üretimini** ve **Target Machine** yapılandırmasını inceledik. Soyut LLVM IR'ın somut işlemci komutlarına dönüştürülürken geçtiği Buyruk Seçimi (Instruction Selection), Buyruk Sıralama (Scheduling) ve Yazmaç Tahsisi (Register Allocation) safhalarını öğrendik.
+
+TableGen (`.td`) dilinin işlemci mimarilerini beyan etmedeki rolünü, SelectionDAG ile GlobalISel arasındaki performans ve derleme süresi farklarını ve Machine IR (MIR) seviyesindeki analizi ele aldık. Son olarak C++ TargetMachine API'si vasıtasıyla derlediğimiz oyun dilini disk üzerinde `.o` nesne dosyalarına aktaran yürütme algoritmasını kodladık. Bir sonraki bölümde, oyun motorlarına canlı betik desteği sunan **ORC JIT, MLIR ve Shader Kod Üretimi** konularına geçeceğiz.
