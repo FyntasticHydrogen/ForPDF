@@ -2,7 +2,7 @@
 
 ## 5.1 LLVM ORC JIT (On-Request Compilation) Mimarisi ve Oyun İçi Betik (Scripting) Çalıştırma
 
-Oyun motorlarında canlı kod yenileme (Hot-Reloading) ve hızlı betik (scripting) çalıştırma kritik gereksinimlerdir. Geleneksel olarak Lua veya C# gibi diller yorumlanarak (interpreted) veya sanal makine üzerinde çalıştırılır. LLVM **ORC JIT (On-Request Compilation)** API'si sayesinde, oyun içinde yazılan betik kodları çalışma zamanında milisaniyeler içinde doğrudan **öznel makine kodına** derlenir ve sıfır performans kaybı ile çalıştırılır.
+Oyun motorlarında canlı kod yenileme (Hot-Reloading) ve hızlı betik (scripting) çalıştırma kritik gereksinimlerdir. Geleneksel olarak Lua veya C# gibi diller yorumlanarak (interpreted) veya sanal makine üzerinde çalıştırılır. LLVM **ORC JIT (On-Request Compilation)** API'si sayesinde, oyun içinde yazılan betik kodları çalışma zamanında milisaniyeler içinde doğrudan **öznel makine koduna** derlenir ve sıfır performans kaybı ile çalıştırılır.
 
 ORC JIT mimarisinin ana bileşenleri şunlardır:
 1. **`ExecutionSession`:** Tüm JIT durumunu, thread'leri ve sembol tablolarını yönetir.
@@ -47,17 +47,14 @@ Oyun içi düşman yapay zekası (AI) veya fizik hesapları JIT ile derlendiğin
 #include <llvm/Support/raw_ostream.h>
 #include <iostream>
 
-// Oyun İçi Script Tarafından Çağrılacak C++ Fonksiyonu (Host Engine Function)
 extern "C" void GameEngine_LogMessage(const char* msg) {
     std::cout << "[Oyun Motoru JIT Log]: " << msg << std::endl;
 }
 
 void runJITScript() {
-    // 1. LLVM Target Sistemlerini Başlat
     llvm::InitializeNativeTarget();
     llvm::InitializeNativeTargetAsmPrinter();
 
-    // 2. LLJIT Örneği Oluşturma
     auto jitOrErr = llvm::orc::LLJITBuilder().create();
     if (!jitOrErr) {
         llvm::errs() << "JIT Oluşturulamadı!\n";
@@ -65,58 +62,56 @@ void runJITScript() {
     }
     auto jit = std::move(*jitOrErr);
 
-    // 3. Thread-Safe LLVM Modülü ve Context Yapılandırması
     auto context = std::make_unique<llvm::LLVMContext>();
     auto module = std::make_unique<llvm::Module>("JITScriptModule", *context);
     llvm::IRBuilder<> builder(*context);
 
-    // 4. C++ Tarafındaki Log Message Fonksiyonunu JIT Modülüne Tanımlama
     auto* logFuncType = llvm::FunctionType::get(builder.getVoidTy(), {builder.getPtrTy()}, false);
     auto* logFunc = llvm::Function::Create(logFuncType, llvm::Function::ExternalLinkage, "GameEngine_LogMessage", module.get());
 
-    // 5. JIT Script Fonksiyonu Oluşturma: void RunScript()
     auto* scriptFuncType = llvm::FunctionType::get(builder.getVoidTy(), false);
     auto* scriptFunc = llvm::Function::Create(scriptFuncType, llvm::Function::ExternalLinkage, "RunScript", module.get());
 
     auto* bb = llvm::BasicBlock::Create(*context, "entry", scriptFunc);
     builder.SetInsertPoint(bb);
 
-    // Metin Sabiti Oluşturma
     auto* strVal = builder.CreateGlobalString("LLVM ORC JIT Script Basariyla Calisti!", "script_str");
     builder.CreateCall(logFunc, {strVal});
     builder.CreateRetVoid();
 
-    // 6. Modülü JIT'e Ekleme
     auto tsm = llvm::orc::ThreadSafeModule(std::move(module), std::move(context));
     cantFail(jit->addIRModule(std::move(tsm)));
 
-    // 7. JIT İçindeki "RunScript" Sembolünü Bulma ve Çalıştırma
     auto symOrErr = jit->lookup("RunScript");
     if (!symOrErr) {
         llvm::errs() << "JIT Sembolü Bulunamadı!\n";
         return;
     }
 
-    // Sembolü C++ Fonksiyon Göstericisine (Function Pointer) Cast Etme
     void (*scriptFn)() = symOrErr->toPtr<void (*)()>();
 
-    // 8. KODU YEREL HIZDA ÇALIŞTIR!
     scriptFn();
 }
 ```
 
 ---
 
-### Koda Adım Adım Derinlemesine Bakış ve JIT Yürütme Algoritması
+### Koda Adım Adım Derinlemesine Bakış ve Satır Satır Analiz
 
-1. **`LLJITBuilder().create()`:**
-   * *Çalışma Mantığı:* Bilgisayarın yerel CPU mimarisini tespit eder, JITLink ve bellek sayfa yöneticisini (Memory Page Manager: Read/Write/Execute izinleri) başlatır.
-2. **`ThreadSafeModule` (TSM) Sarmalayıcısı:**
-   * *Çalışma Mantığı:* `Module` ve `LLVMContext` nesnelerini kilit mekanizması altında birleştirir. Böylece oyun motorunun arka plan iş parçacıkları (Worker Threads) güvenle derleme yapabilir.
-3. **Ev Sahibi Sembol Bağlama (`GameEngine_LogMessage`):**
-   * *Çalışma Mantığı:* C++ tarafında `extern "C"` olarak tanımlanan fonksiyon, JIT sembol tablosuna kaydedilir. JIT derleyicisi bu sembolün bellek adresini oyun motorunun proses adres alanından (Process Address Space) okur.
-4. **`symOrErr->toPtr<void (*)()>()` Fonksiyon Göstericisi Dönüşümü:**
-   * *Çalışma Mantığı:* JIT tarafından RAM'de derlenen makine kodunun başlangıç adresini C++ fonksiyon göstericisine (`function pointer`) dökümler. `scriptFn()` çağrısı, araya hiçbir sanal makine veya yorumlayıcı katmanı girmeden doğrudan CPU seviyesinde yürütülür.
+Yukarıdaki `jit_engine.cpp` uygulamasında gerçekleşen her bir adımı satır numaralarına referans vererek ayrıntılı olarak inceleyelim:
+
+* **Satır 1 - 8:** Gerekli LLVM başlık dosyaları projeye dahil edilir. `LLJIT.h` JIT motorunun temel sınıfını sağlarken, `TargetSelect.h` hedef mimari sürücülerini başlatır. `raw_ostream.h` LLVM'in özel çıktı akış sistemidir.
+* **Satır 10 - 12:** `GameEngine_LogMessage` adlı C++ ev sahibi (host) fonksiyon tanımlanır. Bu fonksiyon, JIT ile derlenen betik kodunun oyun motoru içerisindeki C++ koduna nasıl eriştiğini gösterir. `extern "C"` belirteci, C++ isim karıştırma (name mangling) işlemini engeller ve sembolün C bağlama kuralı ile ORC JIT sembol tablosunda kolayca bulunmasını sağlar.
+* **Satır 14 - 16:** `runJITScript` ana fonksiyonu başlatılır. Satır 15 ve 16'da bulunan `llvm::InitializeNativeTarget()` ve `llvm::InitializeNativeTargetAsmPrinter()` çağrıları, derleyicinin üzerinde çalıştığı hedef CPU mimarisini (x86_64, ARM64 vb.) tespit eder ve makine kodu oluşturucuları belleğe yükler.
+* **Satır 18 - 23:** `llvm::orc::LLJITBuilder().create()` çağrısı ile bir `LLJIT` örneği oluşturulur. `LLJITBuilder`, ORC JIT mimarisinin en üst seviye kolaylaştırıcı arayüzüdür. Arka planda `ExecutionSession`, `JITDylib` ve `JITLink` yapılarını otomatik olarak yapılandırır. Oluşturma başarısız olursa `jitOrErr` bir LLVM `Error` döndürür ve hata mesajı basılır.
+* **Satır 25 - 27:** JIT içinde derlenecek modül için bağımsız bir `LLVMContext` ve `Module` nesnesi oluşturulur. `IRBuilder<>` komut inşa edici başlatılır.
+* **Satır 29 - 30:** Ev sahibi C++ fonksiyonunun tür imzası (`void(char*)`) LLVM tarafında `llvm::FunctionType::get` ile tanımlanır ve `GameEngine_LogMessage` adıyla modüle dışsal (External) sembol olarak eklenir.
+* **Satır 32 - 36:** JIT betiğinin ana giriş noktası olan `void RunScript()` fonksiyonu ve onun ilk temel bloğu (`entry`) oluşturulur. `IRBuilder` komut ekleme noktası bu bloğa ayarlanır.
+* **Satır 38 - 40:** `builder.CreateGlobalString` fonksiyonu ile bellek alanına bir global dizgi (string) sabiti yerleştirilir. Ardından `builder.CreateCall(logFunc, {strVal})` ile C++ ev sahibi fonksiyonu çağrılır ve `builder.CreateRetVoid()` ile fonksiyondan dönülür.
+* **Satır 42 - 43:** Oluşturulan `Module` ve `LLVMContext`, thread-safe bir kılıf olan `llvm::orc::ThreadSafeModule` içine aktarılır. `jit->addIRModule` çağrısı ile bu modül JIT derleme kuyruğuna eklenir.
+* **Satır 46 - 49:** `jit->lookup("RunScript")` metodu, JIT sembol tablosunda `RunScript` fonksiyonunun yerel RAM bellek adresini arar ve derleme işlemini JITLink üzerinden tetikler.
+* **Satır 51:** Bulunan sembolün adresi `toPtr<void (*)()>()` metodu kullanılarak ham bir C++ fonksiyon göstericisine (`function pointer`) dönüştürülür.
+* **Satır 53:** `scriptFn()` çağrısı ile RAM'deki yerel makine kodu doğrudan CPU üzerinde sıfır ek maliyetle yürütülür.
 
 ---
 
@@ -128,8 +123,32 @@ LLVM IR harika bir alt seviye temsil olsa da, yüksek seviyeli matematiksel yap�
 * **`Affine` Dialect:** Döngü optimizasyonları ve bellek erişim desenleri için.
 * **`Vector` / `Linalg` Dialect:** Matrix/Vector işlemleri ve SIMD vektörizasyonu için.
 * **`GPU` Dialect:** CUDA, ROCm ve Vulkan Compute Kernel yönetimi için.
+* **`LLVM` Dialect:** MLIR yapılarından standart LLVM IR'a geçiş (lowering) için.
 
 Oyun dilinizde önce MLIR seviyesinde matris ve vektör optimizasyonları yapabilir, ardından kodu LLVM IR'a indirgeyerek (lowering) donanıma gönderebilirsiniz.
+
+### MLIR Diyalekt İndirgeme (Lowering) Akışı
+
+```
+  +-------------------------------------------------------+
+  |    Oyun Dili AST (Matris & Fizik Vektör Kodları)      |
+  +-------------------------------------------------------+
+                              |
+                              v
+  +-------------------------------------------------------+
+  |    High-Level Dialect: Linalg / Vector / Affine       |
+  +-------------------------------------------------------+
+                              | (High-Level Optimizations)
+                              v
+  +-------------------------------------------------------+
+  |    MLIR LLVM Dialect                                  |
+  +-------------------------------------------------------+
+                              | (MLIR to LLVM IR Translation)
+                              v
+  +-------------------------------------------------------+
+  |    Standard LLVM IR -> Native Machine Code / SPIR-V   |
+  +-------------------------------------------------------+
+```
 
 ---
 
