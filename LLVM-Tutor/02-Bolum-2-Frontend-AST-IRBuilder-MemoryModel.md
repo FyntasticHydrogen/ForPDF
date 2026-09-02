@@ -38,13 +38,12 @@ LLVM IR, güçlü bir şekilde tiplendirilmiş (strongly typed), sonsuz sayıda 
 
 ---
 
-## 2.3 Tekli Atama Biçimi (Static Single Assignment - SSA) ve PHI Düğümleri
+## 2.3 Tekli Atama Biçimine (Static Single Assignment - SSA) ve PHI Düğümleri
 
 ### SSA Nedir ve Neden Hayatidir?
 SSA formunda, her sanal yazmaca veya değişkene **yalnızca bir kez** değer atanabilir. Klasik bir programlama dilinde bir değişkene birden fazla kez değer atanabilir:
 
 ```c
-// Klasik C/C++ Kodu (Gereksiz Değişken Yeniden Atamaları)
 int health = 100;
 health = health - damage;
 health = health + healAmount;
@@ -53,7 +52,6 @@ health = health + healAmount;
 Bu kod SSA yapısına dönüştürüldüğünde, her atama yeni bir SSA sürüm değişkeni (register) oluşturur:
 
 ```llvm
-; LLVM IR SSA Biçimi
 %health0 = copy i32 100
 %health1 = sub i32 %health0, %damage
 %health2 = add i32 %health1, %healAmount
@@ -66,7 +64,6 @@ Bu kod SSA yapısına dönüştürüldüğünde, her atama yeni bir SSA sürüm 
 Dallanma (if-else, döngüler) olan durumlarda bir değişkenin hangi kontrol akışı yolundan geldiği çalışma zamanında belli olur. SSA kuralını bozmadan bu durumu çözmek için **PHI Düğümleri (`phi` instruction)** kullanılır.
 
 ```llvm
-; Oyuncu Can Durumu Örneği LLVM IR Çıktısı
 entry:
   %cmp = icmp sgt i32 %damage, %shield
   br i1 %cmp, label %take_damage, label %blocked
@@ -80,28 +77,29 @@ blocked:
   br label %merge
 
 merge:
-  ; PHI Düğümü: Kodun hangi bloktan geldiğine göre doğru hp değerini seçer
   %final_hp = phi i32 [ %hp_after_hit, %take_damage ], [ %hp_after_block, %blocked ]
   ret i32 %final_hp
 ```
 
-#### PHI Düğümünün C++ API'si ile Adım Adım Kodlanması:
-C++ tarafında bir PHI düğümünü oluşturup bağlamak son derece nettir:
+#### PHI Düğümünün C++ API'si İle Tanımlanması:
 
 ```cpp
-// 1. Adım: 'builder.CreatePHI' metodu ile PHI düğümü objemizi türetiyoruz.
-// İlk parametre: Değişkenin tipi (32-bit tamsayı - i32).
-// İkinci parametre: PHI düğümüne bağlanabilecek olası yol (incoming branches) sayısı (2 adet: take_damage ve blocked).
-// Üçüncü parametre: LLVM IR çıktısındaki sanal yazmaç adı ("final_hp").
 llvm::PHINode* phiNode = builder.CreatePHI(builder.getInt32Ty(), 2, "final_hp");
 
-// 2. Adım: 'phiNode' objemize '.addIncoming' metodunu kullanarak yollardan gelen değerleri bağlıyoruz.
-// 'take_damage' bloğundan gelinmişse '%hp_after_hit' değerini seç diyoruz:
 phiNode->addIncoming(hpAfterHitVal, takeDamageBB);
 
-// 3. Adım: 'blocked' bloğundan gelinmişse '%hp_after_block' değerini seç diyoruz:
 phiNode->addIncoming(hpAfterBlockVal, blockedBB);
 ```
+
+#### Adım Adım Açıklama ve Çalışma İlkesi:
+
+1. **`builder.CreatePHI` İle PHI Nesnesinin Başlatılması:**
+   * **İlk Parametre (`builder.getInt32Ty()`):** PHI düğümünün temsil edeceği verinin tipidir. Örneğimizde can değeri 32-bit tamsayı (`i32`) olduğu için tamsayı tipi verilir.
+   * **İkinci Parametre (`2`):** PHI düğümüne dallanabilecek olası kaynak Basic Block sayısı tahminidir (pre-allocation). `take_damage` ve `blocked` olmak üzere 2 farklı rotamız olduğu için `2` değeri verilmiştir.
+   * **Üçüncü Parametre (`"final_hp"`):** Üretilecek olan LLVM IR SSA sanal yazmacının adıdır.
+2. **`phiNode->addIncoming` İle Rota ve Değer Eşleştirilmesi:**
+   * **`takeDamageBB` Bağlantısı:** İlk `addIncoming` çağrısı, "Eğer yürütme akışı `takeDamageBB` bloğundan `merge` bloğuna geldiysa, `%final_hp` yazmacına `%hp_after_hit` değerini yükle" kuralını tanımlar.
+   * **`blockedBB` Bağlantısı:** İkinci `addIncoming` çağrısı ise, "Eğer yürütme akışı `blockedBB` bloğundan geldiyse, `%hp_after_block` değerini yükle" kuralını tanımlar.
 
 <div class="callout callout-warning">
 <div class="callout-title">PHI Düğümü Kuralı</div>
@@ -124,33 +122,34 @@ Bir Basic Block'un son talimatı mutlaka bir **Terminator Instruction** (Sonland
 Aşağıdaki C++ kod parçası, oyuncunun canı 0'dan büyükse oyuncunun yaşamaya devam ettiği (`alive`), aksi halde öldüğü (`dead`) kontrol akış grafiğini (CFG) inşa eder:
 
 ```cpp
-// 1. Adım: Üç adet BasicBlock nesnesi oluşturuyoruz.
-// Bunlar mantıksal dallanma rotalarımızdır.
 llvm::BasicBlock* aliveBB = llvm::BasicBlock::Create(*context, "alive", playerFunc);
 llvm::BasicBlock* deadBB  = llvm::BasicBlock::Create(*context, "dead", playerFunc);
 llvm::BasicBlock* mergeBB = llvm::BasicBlock::Create(*context, "merge", playerFunc);
 
-// 2. Adım: Oyuncu canını (health) 0 ile karşılaştıran 'icmp sgt' (Signed Greater Than) komutunu üretiyoruz.
-// Dönen 'condValue' objesi i1 (boolean: true/false) tipindedir.
 llvm::Value* condValue = builder.CreateICmpSGT(healthVal, builder.getInt32(0), "is_alive");
 
-// 3. Adım: 'builder.CreateCondBr' metodu ile koşullu dallanma talimatı üretiyoruz.
-// Eğer 'condValue' true ise 'aliveBB' bloğuna, false ise 'deadBB' bloğuna atlar.
 builder.CreateCondBr(condValue, aliveBB, deadBB);
 
-// 4. Adım: 'aliveBB' bloğunun içine giriyoruz ve imlecimizi oraya konumlandırıyoruz.
 builder.SetInsertPoint(aliveBB);
-// Hayatta kalma mantığı komutları...
-builder.CreateBr(mergeBB); // İş bitince ortak birleşme bloğuna (mergeBB) koşulsuz atla.
+builder.CreateBr(mergeBB);
 
-// 5. Adım: 'deadBB' bloğunun içine giriyoruz.
 builder.SetInsertPoint(deadBB);
-// Ölme mantığı komutları...
-builder.CreateBr(mergeBB); // İş bitince ortak birleşme bloğuna (mergeBB) koşulsuz atla.
+builder.CreateBr(mergeBB);
 
-// 6. Adım: Son olarak imlecimizi 'mergeBB' birleşme noktasına getiriyoruz.
 builder.SetInsertPoint(mergeBB);
 ```
+
+#### Adım Adım Açıklama ve Çalışma İlkesi:
+
+1. **`BasicBlock::Create` İle Akış Bloklarının Tanımlanması:**
+   * `aliveBB`, `deadBB` ve `mergeBB` olmak üzere üç adet kontrol bloğu oluşturulur. Parametre olarak geçilen `playerFunc` göstericisi, bu blokların `playerFunc` fonksiyonuna ait olduğunu söyler.
+2. **Koşul Karşılaştırması (`CreateICmpSGT`):**
+   * `builder.CreateICmpSGT` (Integer Compare Signed Greater Than) metodu, oyuncunun canını temsil eden `healthVal` yazmacı ile 0 sabitini karşılaştırır. Karşılaştırma sonucu 1-bitlik boolean (`i1`) tipinde `"is_alive"` yazmacına atanır.
+3. **Koşullu Dallanma Talimatı (`CreateCondBr`):**
+   * `builder.CreateCondBr` metodu LLVM IR `br i1 %is_alive, label %alive, label %dead` talimatını üretir. `condValue` true ise işlemci `aliveBB` bloğuna, false ise `deadBB` bloğuna yönlendirilir.
+4. **Blok İçi Kodlama ve Koşulsuz Atlamalar (`CreateBr`):**
+   * `builder.SetInsertPoint(aliveBB)` ile imleç `aliveBB` içine alınır. İşlemler bitince `builder.CreateBr(mergeBB)` ile akış koşulsuz olarak birleşme noktasına (`mergeBB`) aktarılır.
+   * Aynı işlem `deadBB` için tekrarlanarak her iki kolun da `mergeBB` üzerinde güvenle buluşması sağlanır.
 
 ---
 
@@ -163,20 +162,29 @@ LLVM IR'da iki temel bellek erişim mantığı vardır:
 ### Yığın Tahsisi (`alloca`) ve C++ API Kullanımı
 SSA formunu elle yönetmek zor olduğu için ön yüz derleyicileri genellikle tüm yerel değişkenleri fonksiyonun giriş bloğunda `alloca` ile oluşturur.
 
-#### C++ Adım Adım `alloca` Oluşturulması:
+#### C++ Tarafında `alloca` Tanımlanması:
+
 ```cpp
-// 1. Adım: Fonksiyonun giriş bloğunda 32-bit tamsayı türünde 'player_health' için yığın alanı ayırıyoruz.
-// Dönen 'healthAlloca' objesi bir Pointer (i32*) tipindedir.
 llvm::AllocaInst* healthAlloca = builder.CreateAlloca(builder.getInt32Ty(), nullptr, "player_health");
 
-// 2. Adım: 'builder.CreateStore' metodu ile yığındaki bu adrese ilk değer olarak 100 yazıyoruz.
 builder.CreateStore(builder.getInt32(100), healthAlloca);
 
-// 3. Adım: 'builder.CreateLoad' metodu ile yığındaki adresten değeri okuyup sanal bir yazmaca yüklüyoruz.
 llvm::Value* currentHealth = builder.CreateLoad(builder.getInt32Ty(), healthAlloca, "current_health_val");
 ```
 
+#### Adım Adım Açıklama ve Çalışma İlkesi:
+
+1. **Yığında Yer Ayırma (`CreateAlloca`):**
+   * `builder.CreateAlloca` metodu, fonksiyonun yığın çeçevesinde (stack frame) 32-bitlik tamsayı saklayabilecek bir bellek adresi ayırır.
+   * Dönen `healthAlloca` bir değer değil, o bellek alanını gösteren bir işaretçidir (`i32*`).
+2. **Belleğe Değer Yazma (`CreateStore`):**
+   * `builder.CreateStore` metodu, 100 tamsayı sabitini (`getInt32(100)`) yığındaki `healthAlloca` adresine kopyalar (`store i32 100, i32* %player_health`).
+3. **Bellekten Değer Okuma (`CreateLoad`):**
+   * `builder.CreateLoad` metodu, `healthAlloca` adresindeki veriyi okuyup yeni bir SSA yazmacı olan `currentHealth` içerisine yükler (`%current_health_val = load i32, i32* %player_health`).
+
 LLVM'in `mem2reg` optimizasyon passi (Pass Manager), bu `alloca` bellek erişimlerini otomatik olarak SSA yazmaçlarına ve PHI düğümlerine dönüştürür!
+
+---
 
 ### `GetElementPtr` (GEP) Talimatı ve C++ İle Struct/Array Adres Hesaplaması
 `GetElementPtr` (GEP), LLVM IR'ın en kritik ve sıkça yanlış anlaşılan talimatlarından biridir. GEP **belleğe erişmez (load/store yapmaz)**, yalnızca bellek adresini (pointer arithmetic) hesaplar!
@@ -191,39 +199,37 @@ struct Entity {
 };
 ```
 
-#### C++ Tarafında `Entity` Yapısının C++ LLVM API ile Oluşturulması ve GEP Kullanımı:
+#### C++ Tarafında `Entity` Yapısının Oluşturulması ve GEP Kullanımı:
 
 ```cpp
-// 1. Adım: C++ tarafında 'Entity' struct tipini LLVM'e tanıtıyoruz.
 llvm::StructType* entityType = llvm::StructType::create(*context, "struct.Entity");
 
-// Struct alan tipleri: i32 (id), float (health), [3 x float] (position dizisi)
 llvm::ArrayType* posArrayType = llvm::ArrayType::get(builder.getFloatTy(), 3);
 entityType->setBody({builder.getInt32Ty(), builder.getFloatTy(), posArrayType});
 
-// 2. Adım: 'entityPtr' adında bir Entity* nesnesi olduğunu varsayalım (örn. fonksiyona parametre geldi).
-// Oyuncunun position[1] (y koordinatı) adresini hesaplamak için GEP indekslerimizi hazırlıyoruz:
 std::vector<llvm::Value*> indices = {
-    builder.getInt32(0), // Indis 0: Pointer seviyesinde öteleme yok (entity_ptr[0])
-    builder.getInt32(2), // Indis 2: Struct içindeki 2. alan (position dizisi)
-    builder.getInt32(1)  // Indis 1: position dizisinin 1. elemanı (Y koordinatı)
+    builder.getInt32(0),
+    builder.getInt32(2),
+    builder.getInt32(1)
 };
 
-// 3. Adım: 'builder.CreateGEP' metodu ile bellek adresi hesaplama talimatını üretiyoruz.
-// İlk parametre struct tipi (entityType), ikinci parametre base pointer (entityPtr), üçüncü parametre indisler.
 llvm::Value* yCoordPtr = builder.CreateGEP(entityType, entityPtr, indices, "y_coord_ptr");
 
-// 4. Adım: Artık elde ettiğimiz 'yCoordPtr' adresinden değeri 'load' ile okuyabiliriz:
 llvm::Value* yValue = builder.CreateLoad(builder.getFloatTy(), yCoordPtr, "y_val");
 ```
 
-* **Adres Hesaplama Formülü:**
-$$\text{Hedef Adres} = \text{Taban Adres} + (0 \times \text{sizeof}(Entity)) + \text{offsetof}(Entity, position) + (1 \times \text{sizeof}(float))$$
+#### Adım Adım Açıklama ve Çalışma İlkesi:
 
-<div class="callout callout-info">
-<div class="callout-title">GEP Neden İlk İndis Olarak '0' Alır?</div>
-C/C++ dilindeki `entity_ptr->position[1]` ifadesinde, `entity_ptr` aslında bir dizi nesnesinin ilk elemanının adresidir (`*(entity_ptr + 0)`). İlk indis olan `0`, pointer seviyesinde kaç eleman öteye gidileceğini belirler.
-</div>
+1. **Struct Tipinin Tanımlanması (`StructType::create` ve `setBody`):**
+   * LLVM'e `struct.Entity` isimli bir veri yapısı tanıtılır. `setBody` metoduna sırasıyla `i32` (id), `float` (health) ve `[3 x float]` (position dizisi) tipleri verilerek yapının bellek dizilimi belirlenir.
+2. **GEP İndis Listesinin Mantığı (`indices`):**
+   * **Birinci İndis (`builder.getInt32(0)`):** Base pointer ötelemesidir. `entityPtr[0]` anlamına gelir ve mevcut gösterici nesnesinin kendi adres başlangıcını seçer.
+   * **İkinci İndis (`builder.getInt32(2)`):** Struct yapısı içerisindeki 2. indeksteki elemanı seçer (0: id, 1: health, 2: position).
+   * **Üçüncü İndis (`builder.getInt32(1)`):** Seçilen `position` dizisi içerisindeki 1. indeksteki elemanı seçer (0: X, 1: Y, 2: Z koordinatı).
+3. **GEP Adres Hesaplaması (`CreateGEP`):**
+   * `builder.CreateGEP` çağrısı belleğe erişmeden yalnızca $y$ koordinatının yığındaki tam bayt adresini hesaplar ve bu adresi `yCoordPtr` işaretçisine atar.
+4. **Verinin Okunması (`CreateLoad`):**
+   * Hesaplanan `yCoordPtr` adresinden `float` değer okunarak `yValue` SSA yazmacına yüklenir.
 
 ---
 
@@ -245,47 +251,39 @@ C/C++ dilindeki `entity_ptr->position[1]` ifadesinde, `entity_ptr` aslında bir 
 #include <vector>
 #include <map>
 
-// Derleyici Sembol Tablosu (Symbol Table): Değişken Adı -> Yığın Adresi (AllocaInst*)
 static std::map<std::string, llvm::AllocaInst*> NamedValues;
 
-// Taban AST Sınıfı
 class ExprAST {
 public:
     virtual ~ExprAST() = default;
     virtual llvm::Value* codegen(llvm::LLVMContext& context, llvm::Module& module, llvm::IRBuilder<>& builder) = 0;
 };
 
-// Sayısal Sabit AST Düğümü (Örn: 10.0, 2.5)
 class NumberExprAST : public ExprAST {
     double val;
 public:
     NumberExprAST(double val) : val(val) {}
 
     llvm::Value* codegen(llvm::LLVMContext& context, llvm::Module& module, llvm::IRBuilder<>& builder) override {
-        // ConstantFP::get metodu ile kütüphanemizin merkezi deposundan float sabiti alıyoruz.
         return llvm::ConstantFP::get(context, llvm::APFloat(val));
     }
 };
 
-// Değişken Okuma AST Düğümü (Örn: playerHealth)
 class VariableExprAST : public ExprAST {
     std::string name;
 public:
     VariableExprAST(const std::string& name) : name(name) {}
 
     llvm::Value* codegen(llvm::LLVMContext& context, llvm::Module& module, llvm::IRBuilder<>& builder) override {
-        // 1. Adım: Değişken adını sembol tablomuzda (NamedValues) arıyoruz.
         llvm::AllocaInst* alloca = NamedValues[name];
         if (!alloca) {
             llvm::errs() << "HATA: Tanımsız değişken kullanımı: " << name << "\n";
             return nullptr;
         }
-        // 2. Adım: Değişken yığında bulunduğu için 'CreateLoad' ile adresindeki değeri okuyup döndürüyoruz.
         return builder.CreateLoad(alloca->getAllocatedType(), alloca, name.c_str());
     }
 };
 
-// İkili İşlem (Binary Expression: +, -, *) AST Düğümü
 class BinaryExprAST : public ExprAST {
     char op;
     std::unique_ptr<ExprAST> lhs, rhs;
@@ -294,12 +292,10 @@ public:
         : op(op), lhs(std::move(lhs)), rhs(std::move(rhs)) {}
 
     llvm::Value* codegen(llvm::LLVMContext& context, llvm::Module& module, llvm::IRBuilder<>& builder) override {
-        // Özyineli olarak sol ve sağ alt ağaçların IR kodlarını üretiyoruz.
         llvm::Value* l = lhs->codegen(context, module, builder);
         llvm::Value* r = rhs->codegen(context, module, builder);
         if (!l || !r) return nullptr;
 
-        // İşlem operatörüne göre ilgili LLVM IR talimatını üretiyoruz.
         switch (op) {
             case '+': return builder.CreateFAdd(l, r, "addtmp");
             case '-': return builder.CreateFSub(l, r, "subtmp");
@@ -309,31 +305,25 @@ public:
     }
 };
 
-// Kullanım Örneği Fonksiyonu
 void generateSampleAST() {
-    // 1. LLVM Çekirdek Obje Kurulumları
     auto context = std::make_unique<llvm::LLVMContext>();
     auto module = std::make_unique<llvm::Module>("GameASTModule", *context);
     llvm::IRBuilder<> builder(*context);
 
-    // 2. Örnek İfade Ağacı Oluşturma: (10.0 + 20.0) * 2.5 (Oyun içi Hasar Çarpanı Hesabı)
     auto expr = std::make_unique<BinaryExprAST>(
         '*',
         std::make_unique<BinaryExprAST>('+', std::make_unique<NumberExprAST>(10.0), std::make_unique<NumberExprAST>(20.0)),
         std::make_unique<NumberExprAST>(2.5)
     );
 
-    // 3. Fonksiyon İmzası Oluşturma: double CalculateDamage()
     llvm::FunctionType* ft = llvm::FunctionType::get(builder.getDoubleTy(), false);
     llvm::Function* func = llvm::Function::Create(ft, llvm::Function::ExternalLinkage, "CalculateDamage", module.get());
     llvm::BasicBlock* bb = llvm::BasicBlock::Create(*context, "entry", func);
     builder.SetInsertPoint(bb);
 
-    // 4. AST Kod Üretimini Tetikleme
     llvm::Value* result = expr->codegen(*context, *module, builder);
     builder.CreateRet(result);
 
-    // 5. Doğrulama ve Çıktı
     llvm::verifyFunction(*func);
     module->print(llvm::outs(), nullptr);
 }
@@ -344,11 +334,13 @@ void generateSampleAST() {
 ### Koda Adım Adım Derinlemesine Bakış ve Yürütme Algoritması
 
 1. **`ExprAST::codegen` Sanal Fonksiyon Özyinelemesi (Recursion):**
-   * *Çalışma Mantığı:* Ağacın en altındaki (leaf nodes) sabitler (`NumberExprAST`) önce ziyaret edilir. Alt düğümlerden dönen `llvm::Value*` göstericileri üst düğümlere (`BinaryExprAST`) girdi olarak iletilir. Bu yöntem Post-Order Traversal (Önce Sol, Sonra Sağ, Sonra Kök) algoritmasıdır.
-2. **`builder.CreateFAdd` / `CreateFMul`:**
-   * *Çalışma Mantığı:* İki float değerini toplayan veya çarpan LLVM IR talimatlarını oluşturur ve `addtmp`/`multmp` isimli sanal yazmaçlara atar.
-3. **`builder.CreateRet(result)`:**
-   * *Çalışma Mantığı:* Bloğun sonlandırıcı talimatını (Terminator) ekler ve hesaplanan nihai değeri fonksiyondan döndürür.
+   * AST ağacında kod üretimi Post-Order Traversal (Önce Sol, Sonra Sağ, Sonra Kök) sırasıyla yürür. `BinaryExprAST::codegen` çağrıldığında ilk olarak sol alt ağacın (`lhs->codegen`), ardından sağ alt ağacın (`rhs->codegen`) IR kodları üretilir.
+2. **`NumberExprAST::codegen` İle Sabitlerin Üretimi:**
+   * Yapıdaki sayısal değerler `llvm::ConstantFP::get` çağrısı ile `LLVMContext` deposunda tekilleştirilmiş sabit kayan noktalı sayılara dönüştürülür.
+3. **`VariableExprAST::codegen` İle Değişken Okuma:**
+   * Sembol tablosunda (`NamedValues`) değişkenin yığın adresi (`AllocaInst*`) bulunur. Bulunan adresten `CreateLoad` ile veri okunarak işlemci yazmacına aktarılır.
+4. **`BinaryExprAST` Operatör Seçimi:**
+   * Sol ve sağ alt ağaçlardan gelen `llvm::Value*` yazmaçları operatör karakterine göre (`+`, `-`, `*`) ilgili `CreateFAdd`, `CreateFSub` veya `CreateFMul` metoduna iletilerek matematiksel IR talimatı oluşturulur.
 
 ---
 
